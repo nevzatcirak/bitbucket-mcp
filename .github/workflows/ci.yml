@@ -22,9 +22,6 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      - name: Update npm (workaround for "Exit handler never called" — npm/cli#4828)
-        run: npm install -g npm@latest
-
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 

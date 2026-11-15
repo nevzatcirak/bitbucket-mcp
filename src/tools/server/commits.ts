@@ -79,7 +79,9 @@ const listCommits: ToolManifest = {
       {
         since: args["since"] as string | undefined,
         until: args["until"] as string | undefined,
-        merges: (args["includeMerges"] as boolean) ? undefined : "none",
+        // Valid merge filters: exclude|include|only. Server default (include) is
+        // used unless the caller explicitly excludes merge commits.
+        merges: args["includeMerges"] === false ? "exclude" : undefined,
         withMessages: true,
       },
     );
@@ -106,7 +108,10 @@ const listCommits: ToolManifest = {
       card["date"] = epochToIso(card["date"]);
       return card;
     });
-    return pagedResult(cards, page);
+    const warning = author
+      ? "Author filter is applied client-side on this page only; matching commits may exist on other pages."
+      : undefined;
+    return pagedResult(cards, page, warning);
   },
 };
 

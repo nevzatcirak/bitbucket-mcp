@@ -41,7 +41,7 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 | 📄 Pagination | Normalized `PageMeta` (`isLastPage`, `nextPageStart`, cursor seam for Cloud) |
 | 🔁 Writes | Optimistic-locking retry wrapper (re-fetch + 1 retry on `409`) |
 | 📇 Output | `compact-card` projection helpers — raw payloads never reach the LLM |
-| 🔎 Tools | **18 Server/DC read-only tools** (below) |
+| 🔎 Tools | **18 Server/DC read tools + 11 Server/DC write tools** (below) |
 
 ### 🔍 Discovery
 
@@ -93,7 +93,37 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 | `bb_list_branches` | Branches with default-branch detection (`isDefault`) | `projectKey`, `repositorySlug`, `filter?` |
 | `bb_list_commits` | Commits with client-side author filter | `since?`, `until?`, `author?`, `includeMerges?` |
 
-All list tools return `{ items: [...], page: { size, limit, start, isLastPage, nextPageStart } }` — pass `start: nextPageStart` to fetch the next page.
+All list tools return `{ items: [...], page: { size, limit, start, isLastPage, nextPageStart } }` — pass `start: nextPageStart` to fetch the next page. When a client-side `author` filter is active, `page.warning` notes that matching items may exist on other pages.
+
+## ✍️ Write tools (Server/DC)
+
+All write tools declare `readOnly: false` and vanish from the tool list under `BITBUCKET_READ_ONLY=true`. Errors are structured: `409 → CONFLICT`, `403 → AUTH_FAILED`, `404 → NOT_FOUND`.
+
+### 🌿 Branch writes
+
+| Tool | Purpose | Key parameters |
+|---|---|---|
+| `bb_create_branch` | Create a branch, optionally from a start point | `projectKey`, `repositorySlug`, `name`, `startPoint?` |
+| `bb_delete_branch` | Delete a branch; refuses the default branch with `DELETE_REFUSED` | `projectKey`, `repositorySlug`, `name` |
+
+### 🔀 Pull-request lifecycle
+
+| Tool | Purpose | Key parameters |
+|---|---|---|
+| `bb_create_pull_request` | Open a PR; supports forks (`fromProjectKey`/`fromRepositorySlug`); pre-fills reviewers from the required-reviewers service when available, otherwise notes that reviewers must be added manually | `projectKey`, `repositorySlug`, `title`, `fromBranch`, `toBranch`, `description?`, `reviewers?` |
+| `bb_update_pull_request` | Update title/description/target branch — optimistic locking with one automatic `409` retry | `pullRequestId`, `title?`, `description?`, `toBranch?` |
+| `bb_can_merge_pull_request` | Merge veto analysis: `canMerge`, `conflicted`, `vetoes[]` | `pullRequestId` |
+| `bb_merge_pull_request` | Merge with message + strategy (`merge-commit` \| `squash` \| `fast-forward`); **never auto-retries** on `409` — re-check `bb_can_merge_pull_request` first | `pullRequestId`, `message?`, `strategy?` |
+| `bb_decline_pull_request` | Decline with optional message | `pullRequestId`, `message?` |
+| `bb_reopen_pull_request` | Reopen a declined PR — optimistic locking | `pullRequestId` |
+
+### 💬 Review writes
+
+| Tool | Purpose | Key parameters |
+|---|---|---|
+| `bb_post_pull_request_comment` | PR-level or inline comment (`file`+`line`, `startLine` for multiline suggestion blocks); `severity=BLOCKER` also opens a task; `pending=true` drafts | `pullRequestId`, `text`, `file?`, `line?`, `startLine?`, `severity?`, `taskText?`, `pending?` |
+| `bb_update_pull_request_comment` | Edit text/severity, resolve the thread (`state=RESOLVED`), reopen/close a task (`taskId`+`taskState`) — optimistic locking | `pullRequestId`, `commentId`, `text?`, `severity?`, `state?`, `taskId?`, `taskState?` |
+| `bb_submit_pull_request_review` | Submit a verdict (`APPROVED` \| `NEEDS_WORK` \| `UNAPPROVED`); best-effort publishes pending draft comments; reviewer identity auto-resolved (userSlug → session user → single participant → `userFilter`) | `pullRequestId`, `verdict`, `userSlug?`, `userFilter?` |
 
 ## 📦 Installation
 
@@ -250,7 +280,7 @@ Write flows that target versioned resources use a shared wrapper:
 
 - [x] **Phase 0** — foundation: config, REST client, registry, pagination, compact cards, optimistic-lock wrapper, CI + publish pipelines
 - [x] **Phase 1** — Server/DC read tools: repositories, branches, commits, code search, pull requests, reviews, dashboard
-- [ ] **Phase 2** — Server/DC write tools with optimistic locking
+- [x] **Phase 2** — Server/DC write tools with optimistic locking (branches, PR lifecycle, comments/tasks, review verdicts)
 - [ ] **Phase 3** — Cloud adapter: fill the existing provider seam (cursor-based pagination), Cloud auth
 
 ## 🛠️ Development

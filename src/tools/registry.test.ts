@@ -143,13 +143,30 @@ describe("registerAllTools", () => {
   });
 });
 
+const WRITE_TOOL_NAMES = new Set([
+  "bb_create_branch",
+  "bb_delete_branch",
+  "bb_create_pull_request",
+  "bb_update_pull_request",
+  "bb_can_merge_pull_request",
+  "bb_merge_pull_request",
+  "bb_decline_pull_request",
+  "bb_reopen_pull_request",
+  "bb_post_pull_request_comment",
+  "bb_update_pull_request_comment",
+  "bb_submit_pull_request_review",
+]);
+
 describe("toolManifests", () => {
-  it("ships 18 Server/DC read-only manifests with provider flag set", () => {
-    expect(toolManifests).toHaveLength(18);
+  it("ships 29 Server/DC manifests (18 read + 11 write) with provider flag set", () => {
+    expect(toolManifests).toHaveLength(29);
     for (const manifest of toolManifests) {
       expect(manifest.providers).toEqual(["server"]);
-      expect(manifest.readOnly).toBe(true);
     }
+    expect(toolManifests.filter((m) => m.readOnly)).toHaveLength(18);
+    expect(toolManifests.filter((m) => !m.readOnly).map((m) => m.name).sort()).toEqual(
+      [...WRITE_TOOL_NAMES].sort(),
+    );
   });
 
   it("keeps expected tool names", () => {
@@ -157,6 +174,11 @@ describe("toolManifests", () => {
     expect(names).toEqual(
       [
         "bb_browse_repository",
+        "bb_create_branch",
+        "bb_create_pull_request",
+        "bb_can_merge_pull_request",
+        "bb_decline_pull_request",
+        "bb_delete_branch",
         "bb_get_dashboard_pull_requests",
         "bb_get_file_content",
         "bb_get_inbox_pull_requests",
@@ -173,7 +195,13 @@ describe("toolManifests", () => {
         "bb_list_branches",
         "bb_list_commits",
         "bb_list_pull_requests",
+        "bb_merge_pull_request",
+        "bb_post_pull_request_comment",
+        "bb_reopen_pull_request",
         "bb_search_code",
+        "bb_submit_pull_request_review",
+        "bb_update_pull_request",
+        "bb_update_pull_request_comment",
       ].sort(),
     );
   });

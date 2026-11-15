@@ -45,6 +45,9 @@ import { reviewToolManifests } from "./server/reviews.js";
 import { dashboardToolManifests } from "./server/dashboard.js";
 import { userToolManifests } from "./server/users.js";
 import { commitToolManifests } from "./server/commits.js";
+import { branchWriteToolManifests } from "./server/writes/branches.js";
+import { pullRequestWriteToolManifests } from "./server/writes/pullRequests.js";
+import { reviewWriteToolManifests } from "./server/writes/reviews.js";
 
 export const toolManifests: ToolManifest[] = [
   ...discoveryToolManifests,
@@ -54,6 +57,9 @@ export const toolManifests: ToolManifest[] = [
   ...dashboardToolManifests,
   ...userToolManifests,
   ...commitToolManifests,
+  ...branchWriteToolManifests,
+  ...pullRequestWriteToolManifests,
+  ...reviewWriteToolManifests,
 ];
 
 export function selectManifests(

@@ -22,6 +22,7 @@ export const ERROR_CODES = {
   CONFIG_MISSING: "CONFIG_MISSING",
   READ_ONLY: "READ_ONLY",
   PROVIDER_UNAVAILABLE: "PROVIDER_UNAVAILABLE",
+  DELETE_REFUSED: "DELETE_REFUSED",
   AUTH_FAILED: "AUTH_FAILED",
   NOT_FOUND: "NOT_FOUND",
   CONFLICT: "CONFLICT",
@@ -44,8 +45,28 @@ export function mcpError(code: string, message: string, details?: unknown): McpT
   };
 }
 
+/**
+ * Domain-level tool error: a failure that is not an HTTP status mapping
+ * (e.g. DELETE_REFUSED for a protected branch) but must still surface as a
+ * structured, stable error code to the MCP client.
+ */
+export class ToolError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(code: string, message: string, details?: unknown) {
+    super(message);
+    this.name = "ToolError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export function toMcpError(err: unknown): McpToolResult {
   if (err instanceof RestError) {
+    return mcpError(err.code, err.message, err.details);
+  }
+  if (err instanceof ToolError) {
     return mcpError(err.code, err.message, err.details);
   }
   if (err instanceof Error) {

@@ -44,7 +44,7 @@ const prListFields = defineCardFields([
   ["updated", "updatedDate"],
 ]);
 
-function prCard(pr: unknown, fields = prListFields): Record<string, unknown> {
+export function prCard(pr: unknown, fields = prListFields): Record<string, unknown> {
   const card = projectCard(pr, fields);
   card["created"] = epochToIso(card["created"]);
   card["updated"] = epochToIso(card["updated"]);
@@ -103,7 +103,10 @@ const listPullRequests: ToolManifest = {
       direction: args["direction"] as string,
     });
     const filtered = filterByAuthor(items, args["author"] as string | undefined);
-    return pagedResult(filtered.map((pr) => prCard(pr)), page);
+    const warning = args["author"]
+      ? "Author filter is applied client-side on this page only; matching items may exist on other pages."
+      : undefined;
+    return pagedResult(filtered.map((pr) => prCard(pr)), page, warning);
   },
 };
 
@@ -229,7 +232,7 @@ const getPullRequestBuilds: ToolManifest = {
     const pr = await ctx.provider.client.get<unknown>(prPath(args));
     const commitId = asString(asRecord(asRecord(pr)?.fromRef)?.latestCommit);
     if (!commitId) {
-      return { pullRequestId: args["pullRequestId"], commitId: null, items: [], note: "No source head commit found on the pull request." };
+      return { pullRequestId: args["pullRequestId"], headCommit: null, items: [], note: "No source head commit found on the pull request." };
     }
     const { items, page } = await listPage(ctx, `/rest/build-status/1.0/commits/${commitId}`, args);
     const cards = items.map((build) => {
@@ -237,7 +240,7 @@ const getPullRequestBuilds: ToolManifest = {
       card["dateAdded"] = epochToIso(card["dateAdded"]);
       return card;
     });
-    return { pullRequestId: args["pullRequestId"], commitId, ...pagedResult(cards, page) };
+    return { pullRequestId: args["pullRequestId"], headCommit: commitId, ...pagedResult(cards, page) };
   },
 };
 

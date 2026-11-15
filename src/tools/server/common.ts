@@ -46,8 +46,12 @@ export async function listPage(
   return { items, page };
 }
 
-/** Emit the standard compact paged-result body. */
-export function pagedResult<T>(items: readonly T[], page: PageMeta): Record<string, unknown> {
+/** Emit the standard compact paged-result body; `warning` reports page-scope caveats. */
+export function pagedResult<T>(
+  items: readonly T[],
+  page: PageMeta,
+  warning?: string,
+): Record<string, unknown> {
   return {
     items,
     page: {
@@ -56,6 +60,7 @@ export function pagedResult<T>(items: readonly T[], page: PageMeta): Record<stri
       start: page.start,
       isLastPage: page.isLastPage,
       nextPageStart: page.nextPageStart,
+      ...(warning ? { warning } : {}),
     },
   };
 }

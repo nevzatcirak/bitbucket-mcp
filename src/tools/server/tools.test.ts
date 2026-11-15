@@ -185,6 +185,7 @@ describe("PR tools", () => {
       expect(result.items[0]).toMatchObject({ id: 101, author: "Dev One", fromBranch: "feature/x" });
       expect(result.page.size).toBe(2); // unfiltered envelope size
       expect(result.page.nextPageStart).toBe(25);
+      expect(String(result.page.warning)).toContain("client-side");
       expect(captured[0].url.searchParams.get("state")).toBe("OPEN");
       expect(captured[0].url.searchParams.get("direction")).toBe("INCOMING");
     } finally {
@@ -275,8 +276,8 @@ describe("PR tools", () => {
       const result = (await find("bb_get_pull_request_builds").handler(
         { projectKey: "PLAT", repositorySlug: "api", pullRequestId: 101, limit: 25, start: 0 },
         ctx,
-      )) as { commitId: string; items: Record<string, unknown>[] };
-      expect(result.commitId).toBe("abc123");
+      )) as { headCommit: string; items: Record<string, unknown>[] };
+      expect(result.headCommit).toBe("abc123");
       expect(result.items[0]).toMatchObject({ state: "SUCCESS", name: "build" });
       expect(captured[1].url.pathname).toBe("/rest/build-status/1.0/commits/abc123");
     } finally {
@@ -290,8 +291,8 @@ describe("PR tools", () => {
       const result = (await find("bb_get_pull_request_builds").handler(
         { projectKey: "PLAT", repositorySlug: "api", pullRequestId: 101, limit: 25, start: 0 },
         ctx,
-      )) as { commitId: null; items: unknown[] };
-      expect(result.commitId).toBeNull();
+      )) as { headCommit: null; items: unknown[] };
+      expect(result.headCommit).toBeNull();
       expect(result.items).toEqual([]);
     } finally {
       restore();
@@ -537,6 +538,7 @@ describe("branch and commit tools", () => {
       )) as { items: Record<string, unknown>[] };
       expect(result.items).toHaveLength(1);
       expect(result.items[0]).toMatchObject({ displayId: "aaa", author: "dev1" });
+      expect(String((result.page as { warning?: string }).warning)).toContain("client-side");
       expect(captured[0].url.searchParams.get("withMessages")).toBe("true");
     } finally {
       restore();

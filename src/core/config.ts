@@ -13,6 +13,10 @@ export interface BitbucketConfig {
   token?: string;
   username?: string;
   password?: string;
+  /** Cloud: Atlassian account email for `Basic base64(email:api-token)` auth. */
+  cloudEmail?: string;
+  /** Cloud: API token (paired with cloudEmail) or workspace access token. */
+  cloudApiToken?: string;
   readOnly: boolean;
   customHeaders: Record<string, string>;
 }
@@ -33,13 +37,33 @@ const PROVIDERS: readonly string[] = ["server", "cloud"];
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
   const problems: ConfigProblem[] = [];
 
-  const url = normalizeUrl(env.BITBUCKET_URL, problems);
   const provider = parseProvider(env.BITBUCKET_PROVIDER, problems);
+  const url = normalizeUrl(env.BITBUCKET_URL, problems, provider === "server");
   const token = optional(env.BITBUCKET_TOKEN);
   const username = optional(env.BITBUCKET_USERNAME);
   const password = optional(env.BITBUCKET_PASSWORD);
+  const cloudEmail = optional(env.BITBUCKET_CLOUD_EMAIL);
+  const cloudApiToken = optional(env.BITBUCKET_CLOUD_API_TOKEN);
 
-  if (!token && !(username && password)) {
+  if (provider === "cloud") {
+    // Cloud auth: (cloudEmail + cloudApiToken) Basic, or token Bearer, or
+    // username + password (app password) Basic.
+    const hasCloudTokenPair = Boolean(cloudEmail && cloudApiToken);
+    if (!token && !hasCloudTokenPair && !(username && password)) {
+      problems.push({
+        field: "BITBUCKET_CLOUD_EMAIL",
+        message:
+          "Cloud auth requires either BITBUCKET_CLOUD_EMAIL + BITBUCKET_CLOUD_API_TOKEN (Basic) or BITBUCKET_TOKEN (OAuth bearer).",
+        hint: "API tokens are created at the Atlassian account level; the email is the account email.",
+      });
+    }
+    if (token && (hasCloudTokenPair || (username && password))) {
+      problems.push({
+        field: "BITBUCKET_TOKEN",
+        message: "Multiple credential sets are set for the cloud provider — set exactly one (token, or email+api token, or username+password).",
+      });
+    }
+  } else if (!token && !(username && password)) {
     problems.push({
       field: "BITBUCKET_TOKEN",
       message: "Either BITBUCKET_TOKEN or both BITBUCKET_USERNAME and BITBUCKET_PASSWORD must be set.",
@@ -57,6 +81,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       token: token ?? undefined,
       username: username ?? undefined,
       password: password ?? undefined,
+      cloudEmail: cloudEmail ?? undefined,
+      cloudApiToken: cloudApiToken ?? undefined,
       readOnly: isTruthy(env.BITBUCKET_READ_ONLY),
       customHeaders: headers,
     },
@@ -70,19 +96,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
  */
 export function requireCompleteConfig(config: BitbucketConfig): ConfigProblem[] {
   const problems: ConfigProblem[] = [];
-  if (!config.url) {
-    problems.push({
-      field: "BITBUCKET_URL",
-      message: "BITBUCKET_URL is required.",
-      hint: "e.g. https://bitbucket.example.com",
-    });
+  if (config.provider === "server") {
+    if (!config.url) {
+      problems.push({
+        field: "BITBUCKET_URL",
+        message: "BITBUCKET_URL is required.",
+        hint: "e.g. https://bitbucket.example.com",
+      });
+    }
+    if (!config.token && !(config.username && config.password)) {
+      problems.push({
+        field: "BITBUCKET_TOKEN",
+        message: "Either BITBUCKET_TOKEN or both BITBUCKET_USERNAME and BITBUCKET_PASSWORD must be set.",
+      });
+    }
   }
-  if (!config.token && !(config.username && config.password)) {
-    problems.push({
-      field: "BITBUCKET_TOKEN",
-      message: "Either BITBUCKET_TOKEN or both BITBUCKET_USERNAME and BITBUCKET_PASSWORD must be set.",
-    });
-  }
+  // Cloud: BITBUCKET_URL is optional (defaults to the public 2.0 API base).
+  // Auth completeness is validated in loadConfig via ConfigProblem.
   return problems;
 }
 
@@ -135,14 +165,16 @@ function optional(raw: string | undefined): string | null {
   return v ? v : null;
 }
 
-function normalizeUrl(raw: string | undefined, problems: ConfigProblem[]): string | null {
+function normalizeUrl(raw: string | undefined, problems: ConfigProblem[], required: boolean): string | null {
   const v = optional(raw);
   if (!v) {
-    problems.push({
-      field: "BITBUCKET_URL",
-      message: "BITBUCKET_URL is required.",
-      hint: "e.g. https://bitbucket.example.com",
-    });
+    if (required) {
+      problems.push({
+        field: "BITBUCKET_URL",
+        message: "BITBUCKET_URL is required.",
+        hint: "e.g. https://bitbucket.example.com",
+      });
+    }
     return null;
   }
   let parsed: URL;

@@ -68,6 +68,57 @@ describe("loadConfig", () => {
   });
 });
 
+describe("loadConfig (cloud)", () => {
+  it("needs no BITBUCKET_URL and accepts the email+api-token credential pair", () => {
+    const { config, problems } = loadConfig({
+      BITBUCKET_PROVIDER: "cloud",
+      BITBUCKET_CLOUD_EMAIL: "dev@example.com",
+      BITBUCKET_CLOUD_API_TOKEN: "tok-2",
+    });
+    expect(problems).toEqual([]);
+    expect(config.provider).toBe("cloud");
+    expect(config.url).toBeUndefined();
+    expect(config.cloudEmail).toBe("dev@example.com");
+    expect(config.cloudApiToken).toBe("tok-2");
+  });
+
+  it("accepts a bearer token or an app-password pair on cloud", () => {
+    const bearer = loadConfig({ BITBUCKET_PROVIDER: "cloud", BITBUCKET_TOKEN: "oauth" });
+    expect(bearer.problems).toEqual([]);
+
+    const appPassword = loadConfig({
+      BITBUCKET_PROVIDER: "cloud",
+      BITBUCKET_USERNAME: "dev@example.com",
+      BITBUCKET_PASSWORD: "app-pass",
+    });
+    expect(appPassword.problems).toEqual([]);
+  });
+
+  it("reports a problem when no cloud credential set is complete", () => {
+    const { problems } = loadConfig({ BITBUCKET_PROVIDER: "cloud" });
+    expect(problems.some((p) => p.field === "BITBUCKET_CLOUD_EMAIL")).toBe(true);
+  });
+
+  it("reports a problem when multiple cloud credential sets are mixed", () => {
+    const { problems } = loadConfig({
+      BITBUCKET_PROVIDER: "cloud",
+      BITBUCKET_TOKEN: "oauth",
+      BITBUCKET_CLOUD_EMAIL: "dev@example.com",
+      BITBUCKET_CLOUD_API_TOKEN: "tok-2",
+    });
+    expect(problems.some((p) => p.field === "BITBUCKET_TOKEN" && p.message.includes("exactly one"))).toBe(true);
+  });
+
+  it("requireCompleteConfig stays empty on cloud without BITBUCKET_URL (public default base)", () => {
+    const { config } = loadConfig({
+      BITBUCKET_PROVIDER: "cloud",
+      BITBUCKET_CLOUD_EMAIL: "dev@example.com",
+      BITBUCKET_CLOUD_API_TOKEN: "tok-2",
+    });
+    expect(requireCompleteConfig(config)).toEqual([]);
+  });
+});
+
 describe("requireCompleteConfig", () => {
   it("is empty for a complete config", () => {
     const { config } = loadConfig(FULL_ENV);

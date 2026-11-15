@@ -1,6 +1,7 @@
 /**
- * Server/DC dashboard tools: pull requests the authenticated user is
- * involved in (dashboard, role+state filters) and the raw inbox.
+ * Dashboard tools: pull requests the authenticated user is involved in.
+ * The dashboard maps to Cloud's GET /pullrequests (role+state filters); the
+ * inbox has no Cloud equivalent and stays Server/DC-only.
  */
 
 import { z } from "zod";
@@ -8,6 +9,7 @@ import type { ToolManifest } from "../registry.js";
 import { apiPath, listPage, pagedResult, unwrapPullRequestItem } from "./common.js";
 import { projectCard, defineCardFields } from "../../core/compactCard.js";
 import { epochToIso } from "./common.js";
+import { getDashboardPullRequestsCloud } from "../cloud/reads.js";
 
 const PR_FIELDS = [
   ["id", "id"],
@@ -55,11 +57,13 @@ const getDashboardPullRequests: ToolManifest = {
       .describe("Your role in the pull requests."),
     state: STATE_FIELD,
     limit: z.number().int().min(1).max(1000).default(25).describe("Page size (1-1000)."),
-    start: z.number().int().min(0).default(0).describe("Zero-based page offset."),
+    start: z.number().int().min(0).default(0).describe("Zero-based page offset (Server/DC)."),
+    page: z.number().int().min(1).optional().describe("One-based page number (Cloud only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return getDashboardPullRequestsCloud(args, ctx);
     const { items, page } = await listPage(ctx, apiPath("/dashboard/pull-requests"), args, {
       role: args["role"] as string,
       state: args["state"] as string,

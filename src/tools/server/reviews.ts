@@ -1,13 +1,15 @@
 /**
- * Server/DC review reading: comments + action items (tasks) for a pull
- * request, including severity (BLOCKER) and thread resolution state.
- * Resolved threads are hidden by default.
+ * Review reading: comments + action items (tasks) for a pull request,
+ * including severity (BLOCKER) and thread resolution state. Resolved threads
+ * are hidden by default. Cloud uses the comments + tasks endpoints; on Cloud
+ * severity is detected from the [BLOCKER] text-tag convention.
  */
 
 import { z } from "zod";
 import { asNumber, asRecord, asString, truncateString } from "../../core/json.js";
 import type { ToolManifest } from "../registry.js";
 import { apiPath, listPage, pagedResult } from "./common.js";
+import { getPullRequestCommentsCloud } from "../cloud/reads.js";
 
 interface ThreadCard {
   [key: string]: unknown;
@@ -44,9 +46,9 @@ const getPrCommentsAndActions: ToolManifest = {
   name: "bb_get_pr_comments_and_actions",
   title: "Get pull request comments and action items",
   description:
-    "Read the review discussion of a pull request as threads: comment severity (NORMAL/BLOCKER), thread state (OPEN/RESOLVED) and action tasks. Resolved threads are hidden unless includeResolved=true.",
+    "Read the review discussion of a pull request as threads: comment severity (NORMAL/BLOCKER), thread state (OPEN/RESOLVED) and action tasks. Resolved threads are hidden unless includeResolved=true. On Cloud severity is recognized from the '[BLOCKER]' text prefix written by bb_post_pull_request_comment.",
   inputSchema: {
-    projectKey: z.string().min(1).max(128).describe("Project key."),
+    projectKey: z.string().min(1).max(128).describe("Project key (on Cloud: workspace slug)."),
     repositorySlug: z.string().min(1).max(128).describe("Repository slug."),
     pullRequestId: z.number().int().min(1).describe("Pull request id."),
     severity: z
@@ -60,12 +62,14 @@ const getPrCommentsAndActions: ToolManifest = {
     includeReplies: z.boolean().default(true).describe("Include reply comments inside each thread."),
     maxTextChars: z.number().int().min(50).max(5000).default(400).describe("Maximum characters per comment text."),
     limit: z.number().int().min(1).max(1000).default(100).describe("Comments per page (max 1000)."),
-    start: z.number().int().min(0).default(0).describe("Zero-based page offset."),
+    start: z.number().int().min(0).default(0).describe("Zero-based page offset (Server/DC)."),
+    page: z.number().int().min(1).optional().describe("One-based page number (Cloud only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   // Note: the comments endpoint rejects avatarSize=0 ("must be positive"), so no avatar params are sent.
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return getPullRequestCommentsCloud(args, ctx);
     // Use the activities endpoint: it carries the full discussion (comments,
     // severities, tasks, resolutions) without file-anchor requirements that
     // the bare comments endpoint enforces on some Server versions.

@@ -1,5 +1,7 @@
 /**
- * Server/DC user lookup: by slug or by name/email search.
+ * User lookup for both providers: by slug (Cloud: username/uuid/account_id)
+ * or by name/email search (Server/DC only — Cloud has no user search, a
+ * slug-less call returns the authenticated account).
  */
 
 import { z } from "zod";
@@ -7,6 +9,7 @@ import { defineCardFields, projectCard } from "../../core/compactCard.js";
 import type { ToolManifest } from "../registry.js";
 import { RestError } from "../../core/restClient.js";
 import { apiPath, listPage, pagedResult } from "./common.js";
+import { getUserCloud } from "../cloud/reads.js";
 
 const USER_FIELDS = defineCardFields([
   ["name", "name"],
@@ -19,19 +22,20 @@ const getUser: ToolManifest = {
   name: "bb_get_user",
   title: "Get user",
   description:
-    "Look up a Bitbucket user. Pass userSlug for a direct lookup, or filter to search by name/email prefix (returns up to 25 matches).",
+    "Look up a Bitbucket user. Pass userSlug for a direct lookup, or filter to search by name/email prefix (Server/DC only; on Cloud a call without userSlug returns the authenticated account).",
   inputSchema: {
-    userSlug: z.string().min(1).max(128).optional().describe("Direct lookup by user slug, e.g. 'jdoe'."),
+    userSlug: z.string().min(1).max(128).optional().describe("Direct lookup by user slug (on Cloud: username, uuid or account_id)."),
     filter: z
       .string()
       .min(1)
       .max(200)
       .optional()
-      .describe("Search users by name or email fragment (server-side filter, returns matches)."),
+      .describe("Search users by name or email fragment (Server/DC only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return getUserCloud(args, ctx);
     const slug = args["userSlug"] as string | undefined;
     const filter = args["filter"] as string | undefined;
     if (!slug && !filter) {

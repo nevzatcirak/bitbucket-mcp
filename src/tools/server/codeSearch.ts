@@ -1,7 +1,7 @@
 /**
- * Server/DC code search (requires Lucene-based code search on the instance).
- * Modifier inputs are translated into the Lucene query string:
- *   project:<key>, repo:<projectKey>/<slug>, path:<prefix>, ext:<extension>
+ * Code search for both providers. Server/DC translates modifier inputs into
+ * the Lucene query string (project:, repo:, path:, ext:); Cloud uses the
+ * workspace-scoped search endpoint with only the repo: modifier.
  */
 
 import { z } from "zod";
@@ -10,6 +10,7 @@ import { defineCardFields, projectCard } from "../../core/compactCard.js";
 import { extractPageItems, pageMeta, pageQuery } from "../../core/pagination.js";
 import type { ToolManifest } from "../registry.js";
 import { apiPath, pagedResult } from "./common.js";
+import { searchCodeCloud } from "../cloud/reads.js";
 
 const SEARCH_FIELDS = defineCardFields([
   ["path", "path"],
@@ -22,19 +23,21 @@ const searchCode: ToolManifest = {
   name: "bb_search_code",
   title: "Search code",
   description:
-    "Full-text code search on the Bitbucket Server / Data Center instance. Supports Lucene modifiers: project:<key> (limit to project), repo:<projectKey>/<slug> (limit to repository), path:<prefix> (limit to path), ext:<ext> (file extension). Returns compact result cards with paging metadata.",
+    "Full-text code search. On Server/DC supports Lucene modifiers: project:<key>, repo:<projectKey>/<slug>, path:<prefix>, ext:<ext>. On Cloud the search is workspace-scoped: 'project' selects the workspace (required), 'repo' narrows to one repository ('<workspace>/<slug>'), path/ext modifiers are not supported.",
   inputSchema: {
     query: z.string().min(1).max(500).describe("Free-text search expression, e.g. 'OptimisticLock' or 'class RestClient'."),
-    project: z.string().min(1).max(128).optional().describe("Modifier: limit search to this project key."),
+    project: z.string().min(1).max(128).optional().describe("Modifier: limit search to this project key (on Cloud: the workspace slug — required)."),
     repo: z.string().min(1).max(257).optional().describe("Modifier: limit search to this repository as '<projectKey>/<slug>'."),
-    path: z.string().min(1).max(1024).optional().describe("Modifier: limit search to paths starting with this prefix."),
-    ext: z.string().min(1).max(32).optional().describe("Modifier: limit search to this file extension (without dot), e.g. 'ts'."),
+    path: z.string().min(1).max(1024).optional().describe("Modifier: limit search to paths starting with this prefix (Server/DC only)."),
+    ext: z.string().min(1).max(32).optional().describe("Modifier: limit search to this file extension (Server/DC only), e.g. 'ts'."),
     limit: z.number().int().min(1).max(200).default(25).describe("Page size (max 200 for search)."),
-    start: z.number().int().min(0).default(0).describe("Zero-based page offset."),
+    start: z.number().int().min(0).default(0).describe("Zero-based page offset (Server/DC)."),
+    page: z.number().int().min(1).optional().describe("One-based page number (Cloud only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return searchCodeCloud(args, ctx);
     const modifiers = [
       args["project"] ? `project:${args["project"]}` : null,
       args["repo"] ? `repo:${args["repo"]}` : null,

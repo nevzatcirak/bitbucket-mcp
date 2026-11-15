@@ -1,8 +1,8 @@
 /**
- * Server/DC pull-request read tools: listing, detail, changes, diffs and
- * build statuses. Author filtering on listPullRequests and listCommits is
- * applied client-side (the Server/DC REST API has no server-side author
- * parameter on these endpoints) — paging metadata reflects unfiltered pages.
+ * Pull-request read tools (listing, detail, changes, diffs, build statuses)
+ * for both providers. Author filtering on listPullRequests is client-side on
+ * both providers (no server-side author parameter) — paging metadata reflects
+ * unfiltered pages.
  */
 
 import { z } from "zod";
@@ -12,10 +12,23 @@ import type { ToolManifest } from "../registry.js";
 import { RestError } from "../../core/restClient.js";
 import { apiPath, epochToIso, listPage, pagedResult } from "./common.js";
 import { projectDiffFile } from "./diffTruncate.js";
+import {
+  getPullRequestBuildsCloud,
+  getPullRequestChangesCloud,
+  getPullRequestCloud,
+  getPullRequestDiffCloud,
+  listPullRequestsCloud,
+} from "../cloud/reads.js";
 
 const LIMIT_FIELD = z.number().int().min(1).max(1000).default(25).describe("Page size (1-1000).");
-const START_FIELD = z.number().int().min(0).default(0).describe("Zero-based page offset.");
-const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key, e.g. 'API'.");
+const START_FIELD = z.number().int().min(0).default(0).describe("Zero-based page offset (Server/DC).");
+const PAGE_FIELD = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe("One-based page number (Cloud only; from nextPageStart of the previous call). Ignored on Server/DC.");
+const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key (on Cloud: workspace slug).");
 const REPO_FIELD = z.string().min(1).max(128).describe("Repository slug, e.g. 'service-api'.");
 const PR_ID_FIELD = z.number().int().min(1).describe("Pull request id, e.g. 101.");
 
@@ -91,10 +104,12 @@ const listPullRequests: ToolManifest = {
       .describe("Filter by author username or display name (case-insensitive, client-side)."),
     limit: LIMIT_FIELD,
     start: START_FIELD,
+    page: PAGE_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return listPullRequestsCloud(args, ctx);
     const path = apiPath(
       `/projects/${args["projectKey"] as string}/repos/${args["repositorySlug"] as string}/pull-requests`,
     );
@@ -131,10 +146,11 @@ const getPullRequest: ToolManifest = {
     pullRequestId: PR_ID_FIELD,
     maxDescriptionChars: z.number().int().min(0).max(10_000).default(600).describe("Maximum description characters."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
     requireId(args);
+    if (ctx.provider.id === "cloud") return getPullRequestCloud(args, ctx);
     const pr = await ctx.provider.client.get<unknown>(prPath(args));
     const card = prCard(pr, PR_FIELDS);
     card["description"] = truncateString(asString(asRecord(pr)?.description) ?? "", args["maxDescriptionChars"] as number);
@@ -162,11 +178,13 @@ const getPullRequestChanges: ToolManifest = {
     pullRequestId: PR_ID_FIELD,
     limit: LIMIT_FIELD,
     start: START_FIELD,
+    page: PAGE_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
     requireId(args);
+    if (ctx.provider.id === "cloud") return getPullRequestChangesCloud(args, ctx);
     const { items, page } = await listPage(ctx, `${prPath(args)}/changes`, args);
     const cards = items.map((item) => {
       const record = asRecord(item);
@@ -197,10 +215,11 @@ const getPullRequestDiff: ToolManifest = {
       .default(1200)
       .describe("Preview budget per file (head 60% / tail 40% on truncation)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
     requireId(args);
+    if (ctx.provider.id === "cloud") return getPullRequestDiffCloud(args, ctx);
     const filePath = args["path"] as string | undefined;
     const suffix = filePath ? `/${filePath.replace(/^\/+/, "")}` : "";
     const payload = await ctx.provider.client.get<unknown>(`${prPath(args)}/diff${suffix}`, {
@@ -224,11 +243,13 @@ const getPullRequestBuilds: ToolManifest = {
     pullRequestId: PR_ID_FIELD,
     limit: LIMIT_FIELD,
     start: START_FIELD,
+    page: PAGE_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
     requireId(args);
+    if (ctx.provider.id === "cloud") return getPullRequestBuildsCloud(args, ctx);
     const pr = await ctx.provider.client.get<unknown>(prPath(args));
     const commitId = asString(asRecord(asRecord(pr)?.fromRef)?.latestCommit);
     if (!commitId) {

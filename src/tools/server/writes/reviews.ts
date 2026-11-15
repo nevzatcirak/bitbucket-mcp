@@ -1,6 +1,9 @@
 /**
- * Server/DC review write tools: post/update comments (inline anchors,
- * severity, pending drafts, tasks) and submit a review verdict.
+ * Review write tools: post/update comments (inline anchors, severity, pending
+ * drafts, tasks) and submit a review verdict. Server/DC uses severity fields,
+ * pending drafts and optimistic locks; Cloud has none of those — BLOCKER is a
+ * `[BLOCKER]` text tag + a real task, pending drafts are rejected, NEEDS_WORK
+ * maps to the request-changes endpoint and reviews are self-only.
  */
 
 import { z } from "zod";
@@ -10,8 +13,13 @@ import type { ToolCallContext, ToolManifest } from "../../registry.js";
 import { RestError } from "../../../core/restClient.js";
 import { withOptimisticLock } from "../../../core/optimisticLock.js";
 import { extractPageItems } from "../../../core/pagination.js";
+import {
+  postPullRequestCommentCloud,
+  submitPullRequestReviewCloud,
+  updatePullRequestCommentCloud,
+} from "../../cloud/writes.js";
 
-const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key.");
+const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key (on Cloud: workspace slug).");
 const REPO_FIELD = z.string().min(1).max(128).describe("Repository slug.");
 const PR_ID_FIELD = z.number().int().min(1).describe("Pull request id.");
 
@@ -27,7 +35,7 @@ const postPullRequestComment: ToolManifest = {
   name: "bb_post_pull_request_comment",
   title: "Post pull request comment",
   description:
-    "Post a comment on a pull request: PR-level, or inline with file+line (and startLine for multiline suggestion blocks). severity=BLOCKER additionally creates a follow-up task. pending=true stores a draft comment published later by bb_submit_pull_request_review.",
+    "Post a comment on a pull request: PR-level, or inline with file+line (and startLine for multiline suggestion blocks). severity=BLOCKER additionally creates a follow-up task (on Cloud it also prefixes the text with '[BLOCKER]'). pending=true drafts the comment on Server/DC (rejected on Cloud — no draft support).",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
@@ -42,11 +50,12 @@ const postPullRequestComment: ToolManifest = {
     startLine: z.number().int().min(1).optional().describe("First line of a multi-line comment/suggestion block."),
     severity: z.enum(["NORMAL", "BLOCKER"]).default("NORMAL").describe("BLOCKER additionally creates a follow-up task."),
     taskText: z.string().min(1).max(2000).optional().describe("Custom task text when severity=BLOCKER."),
-    pending: z.boolean().default(false).describe("true = draft the comment; publish it via bb_submit_pull_request_review."),
+    pending: z.boolean().default(false).describe("true = draft the comment (Server/DC only); publish it via bb_submit_pull_request_review."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return postPullRequestCommentCloud(args, ctx);
     const file = args["file"] as string | undefined;
     const line = args["line"] as number | undefined;
     if (file && line === undefined) {
@@ -104,21 +113,22 @@ const updatePullRequestComment: ToolManifest = {
   name: "bb_update_pull_request_comment",
   title: "Update pull request comment",
   description:
-    "Update a comment's text or severity, resolve/unresolve its thread (state=RESOLVED|OPEN), or reopen/close one of its tasks (taskId+taskState). Optimistic locking: re-fetch + one automatic retry on 409.",
+    "Update a comment's text or severity, resolve/unresolve its thread (state=RESOLVED|OPEN), or reopen/close one of its tasks (taskId+taskState). Server/DC uses optimistic locking (re-fetch + one retry on 409); Cloud applies single PUTs and has no severity field (the '[BLOCKER]' text tag is the convention).",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
     pullRequestId: PR_ID_FIELD,
     commentId: z.number().int().min(1).describe("Comment id to update."),
     text: z.string().min(1).max(32_000).optional().describe("New comment text."),
-    severity: z.enum(["NORMAL", "BLOCKER"]).optional().describe("New severity."),
+    severity: z.enum(["NORMAL", "BLOCKER"]).optional().describe("New severity (Server/DC only; echoed with a note on Cloud)."),
     state: z.enum(["OPEN", "RESOLVED"]).optional().describe("Thread state (RESOLVED resolves the thread)."),
     taskId: z.number().int().min(1).optional().describe("Task id to update (requires taskState)."),
     taskState: z.enum(["OPEN", "RESOLVED"]).optional().describe("New task state (requires taskId)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return updatePullRequestCommentCloud(args, ctx);
     const commentId = args["commentId"] as number;
 
     const updated = await withOptimisticLock({
@@ -167,18 +177,19 @@ const submitPullRequestReview: ToolManifest = {
   name: "bb_submit_pull_request_review",
   title: "Submit pull request review",
   description:
-    "Submit a review verdict (APPROVED | NEEDS_WORK | UNAPPROVED) as a participant, best-effort publishing pending draft comments first. Reviewer identity is resolved automatically: explicit userSlug → session user → consensus of recent activity authors → single PR participant → userFilter search; otherwise a structured VALIDATION error asks for userSlug.",
+    "Submit a review verdict (APPROVED | NEEDS_WORK | UNAPPROVED). Server/DC: best-effort publishing of pending drafts first, reviewer identity resolved automatically (userSlug → session user → activity consensus → single participant → userFilter). Cloud: reviews always act as the authenticated user (a mismatching userSlug is rejected), NEEDS_WORK maps to 'request changes', no pending drafts exist.",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
     pullRequestId: PR_ID_FIELD,
     verdict: z.enum(["APPROVED", "NEEDS_WORK", "UNAPPROVED"]).describe("Review verdict to submit."),
-    userSlug: z.string().min(1).max(128).optional().describe("Reviewer slug; resolved automatically when omitted."),
-    userFilter: z.string().min(1).max(200).optional().describe("Fallback: disambiguate your user by name/email filter."),
+    userSlug: z.string().min(1).max(128).optional().describe("Reviewer slug; resolved automatically when omitted (must match the configured account on Cloud)."),
+    userFilter: z.string().min(1).max(200).optional().describe("Fallback: disambiguate your user by name/email filter (Server/DC only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return submitPullRequestReviewCloud(args, ctx);
     const userSlug = await resolveReviewer(ctx, args);
 
     let publishedComments: number | null = null;

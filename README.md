@@ -1,6 +1,6 @@
 # ⚡ BITBUCKET-MCP
 
-A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) server (stdio) for **Bitbucket Server / Data Center**, with a ready adapter seam for **Bitbucket Cloud** — compact cards, pagination-aware listings, optimistic-lock-safe writes.
+A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) server (stdio) for **Bitbucket Server / Data Center** and **Bitbucket Cloud** (REST 2.0) — compact cards, pagination-aware listings, optimistic-lock-safe writes.
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
@@ -17,7 +17,7 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 ![node](https://img.shields.io/node/v/%40nevzatcirak/bitbucket-mcp)
 ![License](https://img.shields.io/npm/l/%40nevzatcirak/bitbucket-mcp)
 
-> **Server/DC support now, Cloud adapter coming.** The tool layer, output format and pagination are deployment-agnostic from day one. Every tool manifest declares `providers: ["server", "cloud"]`; tools whose manifest does not list the active provider are simply never advertised to the MCP client. Cloud-only tools already respond with a structured `PROVIDER_UNAVAILABLE` error instead of crashing.
+> **One server, both flavors.** Every tool manifest declares `providers: ["server", "cloud"]`; tools whose manifest does not list the active provider are simply never advertised to the MCP client (Server/DC: 29 tools, Cloud: 27). Where the two APIs diverge (optimistic locks, merge strategies, draft comments, review verdicts), the adapter forks the flow and documents the difference in the tool description and result notes.
 
 ---
 
@@ -41,7 +41,7 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 | 📄 Pagination | Normalized `PageMeta` (`isLastPage`, `nextPageStart`, cursor seam for Cloud) |
 | 🔁 Writes | Optimistic-locking retry wrapper (re-fetch + 1 retry on `409`) |
 | 📇 Output | `compact-card` projection helpers — raw payloads never reach the LLM |
-| 🔎 Tools | **18 Server/DC read tools + 11 Server/DC write tools** (below) |
+| 🔎 Tools | **27 tools on both providers** (18 read + 11 on Server/DC, 17 read + 10 on Cloud) |
 
 ### 🔍 Discovery
 
@@ -93,9 +93,9 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 | `bb_list_branches` | Branches with default-branch detection (`isDefault`) | `projectKey`, `repositorySlug`, `filter?` |
 | `bb_list_commits` | Commits with client-side author filter | `since?`, `until?`, `author?`, `includeMerges?` |
 
-All list tools return `{ items: [...], page: { size, limit, start, isLastPage, nextPageStart } }` — pass `start: nextPageStart` to fetch the next page. When a client-side `author` filter is active, `page.warning` notes that matching items may exist on other pages.
+All list tools return `{ items: [...], page: { size, limit, start, isLastPage, nextPageStart } }` — pass `start: nextPageStart` to fetch the next page (Server/DC). On Cloud, list tools additionally accept `page` (one-based) and return `page.nextCursor` (a string page number from the API's `next` URL) — pass `page: 2` to continue. When a client-side `author` filter is active, `page.warning` notes that matching items may exist on other pages.
 
-## ✍️ Write tools (Server/DC)
+## ✍️ Write tools
 
 All write tools declare `readOnly: false` and vanish from the tool list under `BITBUCKET_READ_ONLY=true`. Errors are structured: `409 → CONFLICT`, `403 → AUTH_FAILED`, `404 → NOT_FOUND`.
 
@@ -151,24 +151,67 @@ npm run build && node dist/index.js --version
 
 ## ⚙️ Configuration
 
-| Variable | Required | Description |
-|---|---|---|
-| `BITBUCKET_URL` | ✅ | Base URL, no trailing slash — e.g. `https://bitbucket.example.com` |
-| `BITBUCKET_PROVIDER` | — | `server` (default, Server/DC) or `cloud` (adapter not implemented yet) |
-| `BITBUCKET_TOKEN` | A or B | Token auth. Server/DC PAT → `Authorization: Bearer`. Cloud API token → used with the username |
-| `BITBUCKET_USERNAME` | A or B | Credential auth (with `BITBUCKET_PASSWORD`) → `Authorization: Basic` |
-| `BITBUCKET_PASSWORD` | A or B | See `BITBUCKET_USERNAME` |
-| `BITBUCKET_READ_ONLY` | — | `true` hides all write tools from the MCP client |
-| `BITBUCKET_CUSTOM_HEADERS` | — | Comma-separated `Name: Value` pairs appended to every request |
+| Variable | Provider | Required | Description |
+|---|---|---|---|
+| `BITBUCKET_PROVIDER` | both | — | `server` (default, Server/DC) or `cloud` (REST 2.0) |
+| `BITBUCKET_URL` | server | ✅ | Base URL, no trailing slash — e.g. `https://bitbucket.example.com` |
+| `BITBUCKET_URL` | cloud | — | Optional REST 2.0 base override; defaults to `https://api.bitbucket.org/2.0` |
+| `BITBUCKET_TOKEN` | both | A | Token auth → `Authorization: Bearer` (Server/DC PAT, Cloud OAuth/workspace token) |
+| `BITBUCKET_USERNAME` | both | B | Credential auth (with `BITBUCKET_PASSWORD`) → `Authorization: Basic` |
+| `BITBUCKET_PASSWORD` | both | A or B | See `BITBUCKET_USERNAME` (Cloud: app password) |
+| `BITBUCKET_CLOUD_EMAIL` | cloud | A | Atlassian account email (with `BITBUCKET_CLOUD_API_TOKEN`) → `Basic base64(email:token)` |
+| `BITBUCKET_CLOUD_API_TOKEN` | cloud | A | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| `BITBUCKET_READ_ONLY` | both | — | `true` hides all write tools from the MCP client |
+| `BITBUCKET_CUSTOM_HEADERS` | both | — | Comma-separated `Name: Value` pairs appended to every request |
 
-**Auth matrix:**
+**Auth matrix (exactly one credential set per provider):**
 
-| Deployment | Option A | Option B |
-|---|---|---|
-| Server / Data Center | `BITBUCKET_TOKEN` (PAT → Bearer) | `BITBUCKET_USERNAME` + `BITBUCKET_PASSWORD` (Basic) |
-| Cloud | `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` (Basic) | *(Bearer-style tokens supported by the client layer)* |
+| Provider | Option A | Option B | Option C |
+|---|---|---|---|
+| Server / Data Center | `BITBUCKET_TOKEN` (PAT → Bearer) | `BITBUCKET_USERNAME` + `BITBUCKET_PASSWORD` (Basic) | — |
+| Cloud | `BITBUCKET_CLOUD_EMAIL` + `BITBUCKET_CLOUD_API_TOKEN` (Basic) | `BITBUCKET_TOKEN` (OAuth/workspace token → Bearer) | `BITBUCKET_USERNAME` + `BITBUCKET_PASSWORD` (app password → Basic) |
 
 Missing configuration never crashes the server: problems are logged at startup and the affected tools answer with a structured `CONFIG_MISSING` error.
+
+### Provider mapping (Cloud)
+
+Tool parameters stay stable across providers — on Cloud the `projectKey` parameter is translated to a **workspace slug**:
+
+- **Pagination:** Cloud uses `pagelen` + one-based `page`; listings return `page.nextCursor` (the follow-up page number from the API's `next` URL). Pass `page: <nextCursor>` to continue.
+- **No optimistic lock:** Cloud has no `version` field — `bb_update_pull_request` / comment updates are single partial PUTs (last write wins); the Server/DC 409-retry wrapper is bypassed.
+- **Merge strategies:** translated `merge-commit → merge_commit`, `fast-forward → fast_forward` (squash is identical).
+- **Mergeability:** Cloud has no veto API — `bb_can_merge_pull_request` derives `canMerge` from the PR state + the conflicts pre-check.
+- **Review verdicts:** Cloud approvals always act as the authenticated user; `NEEDS_WORK` maps to the `request-changes` endpoint; `userSlug` must match the configured account.
+- **Draft comments:** Cloud has none — `pending: true` is rejected with `VALIDATION`.
+- **BLOCKER severity:** Cloud comments have no severity field — the text is prefixed with `[BLOCKER]` (detected back by `bb_get_pr_comments_and_actions`) and a real Cloud task is anchored to the comment.
+- **No Cloud equivalent:** `bb_get_inbox_pull_requests` and `bb_reopen_pull_request` (Cloud declined PRs cannot be reopened) stay Server/DC-only; `since`/`until` commit ranges and `direction` on PR lists are ignored on Cloud.
+
+### Tool × provider matrix
+
+| Tool | Server/DC | Cloud |
+|---|:-:|:-:|
+| `bb_get_projects` | ✅ projects | ✅ workspaces |
+| `bb_get_project` | ✅ | ✅ workspace |
+| `bb_get_repositories` / `bb_get_repository` | ✅ | ✅ |
+| `bb_browse_repository` / `bb_get_file_content` | ✅ | ✅ |
+| `bb_search_code` | ✅ Lucene modifiers (`project:` `repo:` `path:` `ext:`) | ✅ workspace-scoped, `repo:` only |
+| `bb_list_branches` / `bb_list_commits` | ✅ | ✅ (since/until ignored; merges filtered client-side) |
+| `bb_list_pull_requests` / `bb_get_pull_request` | ✅ | ✅ (direction ignored) |
+| `bb_get_pull_request_changes` / `bb_get_pull_request_diff` | ✅ per-file compaction | ✅ whole-diff truncation |
+| `bb_get_pull_request_builds` | ✅ build-status API | ✅ commit statuses |
+| `bb_get_pr_comments_and_actions` | ✅ activities | ✅ comments + tasks (`[BLOCKER]` tag) |
+| `bb_get_dashboard_pull_requests` | ✅ | ✅ `GET /pullrequests?role=` |
+| `bb_get_inbox_pull_requests` | ✅ | ❌ server-only |
+| `bb_get_user` | ✅ slug or filter search | ✅ slug; filter → authenticated account |
+| `bb_create_branch` / `bb_delete_branch` | ✅ branch-admin service | ✅ refs/branches |
+| `bb_create_pull_request` | ✅ (+ required-reviewers prefill) | ✅ (explicit reviewers only) |
+| `bb_update_pull_request` | ✅ optimistic lock | ✅ partial PUT |
+| `bb_can_merge_pull_request` | ✅ veto API | ✅ state + conflicts |
+| `bb_merge_pull_request` / `bb_decline_pull_request` | ✅ | ✅ |
+| `bb_reopen_pull_request` | ✅ | ❌ server-only (no Cloud reopen) |
+| `bb_post_pull_request_comment` | ✅ (+ pending drafts) | ✅ (pending rejected) |
+| `bb_update_pull_request_comment` | ✅ optimistic lock | ✅ resolve/unresolve + tasks |
+| `bb_submit_pull_request_review` | ✅ identity auto-resolved | ✅ self-only; NEEDS_WORK → request-changes |
 
 ## 🔌 MCP client configuration
 
@@ -231,6 +274,25 @@ Missing configuration never crashes the server: problems are logged at startup a
 }
 ```
 
+**Bitbucket Cloud** (Claude Desktop example — no `BITBUCKET_URL` needed):
+
+```json
+{
+  "mcpServers": {
+    "bitbucket-cloud": {
+      "command": "npx",
+      "args": ["-y", "@nevzatcirak/bitbucket-mcp"],
+      "env": {
+        "BITBUCKET_PROVIDER": "cloud",
+        "BITBUCKET_CLOUD_EMAIL": "<atlassian-account-email>",
+        "BITBUCKET_CLOUD_API_TOKEN": "<api-token>",
+        "BITBUCKET_READ_ONLY": "false"
+      }
+    }
+  }
+}
+```
+
 ## 🧪 Tool usage examples
 
 ```text
@@ -281,7 +343,7 @@ Write flows that target versioned resources use a shared wrapper:
 - [x] **Phase 0** — foundation: config, REST client, registry, pagination, compact cards, optimistic-lock wrapper, CI + publish pipelines
 - [x] **Phase 1** — Server/DC read tools: repositories, branches, commits, code search, pull requests, reviews, dashboard
 - [x] **Phase 2** — Server/DC write tools with optimistic locking (branches, PR lifecycle, comments/tasks, review verdicts)
-- [ ] **Phase 3** — Cloud adapter: fill the existing provider seam (cursor-based pagination), Cloud auth
+- [x] **Phase 3** — Cloud adapter (REST 2.0): workspaces/repositories/PRs/branches/comments, cursor pagination, Cloud auth (API token / OAuth / app password)
 
 ## 🛠️ Development
 
@@ -309,11 +371,12 @@ src/
 │   ├── errors.ts            # structured MCP error results
 │   └── json.ts              # safe JSON accessors
 ├── providers/
-│   ├── server/              # Server/DC adapter (implemented)
-│   └── cloud/               # Cloud adapter (seam ready, not implemented)
+│   ├── server/              # Server/DC adapter (REST 1.0)
+│   └── cloud/               # Cloud adapter (REST 2.0)
 └── tools/
-    └── registry.ts          # manifest-driven tool registration
-    └── server/              # Server/DC tool manifests (18 read-only tools)
+    ├── registry.ts          # manifest-driven tool registration
+    ├── server/              # shared tool manifests + Server/DC handlers
+    └── cloud/               # Cloud handler forks (REST 2.0)
 ```
 
 ## 🚀 Publishing

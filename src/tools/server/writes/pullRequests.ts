@@ -1,6 +1,12 @@
 /**
- * Server/DC pull-request lifecycle write tools: create, update (optimistic
- * lock mandatory), merge-ability analysis, merge, decline and reopen.
+ * Pull-request lifecycle write tools (create, update, merge-ability, merge,
+ * decline, reopen) for both providers.
+ *
+ * Server/DC: optimistic-lock `version` on every mutation (one retry on 409).
+ * Cloud: no version — partial PUTs (last write wins); reopen has no Cloud
+ * equivalent (reopenPullRequest stays Server/DC-only); merge strategy ids are
+ * translated (merge-commit→merge_commit, fast-forward→fast_forward); merge
+ * veto analysis derives from PR state + the conflicts pre-check.
  *
  * Structured error mapping: 409 → CONFLICT, 403 → AUTH_FAILED (permission),
  * 404 → NOT_FOUND — handled centrally by RestClient.errorCodeForStatus.
@@ -14,8 +20,15 @@ import { RestError } from "../../../core/restClient.js";
 import { withOptimisticLock } from "../../../core/optimisticLock.js";
 import { epochToIso } from "../common.js";
 import { prCard as buildPrCard } from "../pullRequests.js";
+import {
+  canMergePullRequestCloud,
+  createPullRequestCloud,
+  declinePullRequestCloud,
+  mergePullRequestCloud,
+  updatePullRequestCloud,
+} from "../../cloud/writes.js";
 
-const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key (target repository).");
+const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key (target repository; on Cloud: workspace slug).");
 const REPO_FIELD = z.string().min(1).max(128).describe("Target repository slug.");
 const PR_ID_FIELD = z.number().int().min(1).describe("Pull request id.");
 
@@ -50,11 +63,12 @@ const createPullRequest: ToolManifest = {
     toBranch: z.string().min(1).max(256).describe("Target branch name (without refs/heads/)."),
     fromProjectKey: z.string().min(1).max(128).optional().describe("Source project key for fork PRs (default: projectKey)."),
     fromRepositorySlug: z.string().min(1).max(128).optional().describe("Source repository slug for fork PRs (default: repositorySlug)."),
-    reviewers: z.array(z.string().min(1).max(128)).max(50).optional().describe("Explicit reviewer usernames; overrides the required-reviewers service."),
+    reviewers: z.array(z.string().min(1).max(128)).max(50).optional().describe("Explicit reviewer usernames (on Cloud: usernames or '{uuid}' strings); overrides the required-reviewers service (Server/DC)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return createPullRequestCloud(args, ctx);
     const toProject = args["projectKey"] as string;
     const toRepo = args["repositorySlug"] as string;
     const fromProject = (args["fromProjectKey"] as string | undefined) ?? toProject;
@@ -113,7 +127,7 @@ const updatePullRequest: ToolManifest = {
   name: "bb_update_pull_request",
   title: "Update pull request",
   description:
-    "Update title, description or target branch of a pull request. Uses optimistic locking: the current version is re-fetched and on a 409 conflict the mutation is retried exactly once against the fresh version.",
+    "Update title, description or target branch of a pull request. Server/DC uses optimistic locking (re-fetch + one retry on 409); Cloud has no version field and applies a single partial PUT.",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
@@ -122,9 +136,10 @@ const updatePullRequest: ToolManifest = {
     description: z.string().max(32_000).optional().describe("New description (omit to keep current)."),
     toBranch: z.string().min(1).max(256).optional().describe("Retarget to this branch (omit to keep current)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return updatePullRequestCloud(args, ctx);
     const updated = await withOptimisticLock({
       fetchCurrent: () => fetchPr(ctx, args),
       apply: (current) => {
@@ -159,15 +174,16 @@ const canMergePullRequest: ToolManifest = {
   name: "bb_can_merge_pull_request",
   title: "Check pull request mergeability",
   description:
-    "Read-only merge veto analysis for a pull request: canMerge, conflicted flag and the list of vetoes with summary/detail messages.",
+    "Read-only merge veto analysis for a pull request: canMerge, conflicted flag and the list of vetoes with summary/detail messages. On Cloud the analysis derives from the PR state and the conflicts pre-check (no server-side veto API).",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
     pullRequestId: PR_ID_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return canMergePullRequestCloud(args, ctx);
     const payload = await ctx.provider.client.get<unknown>(`${prPath(args)}/merge`);
     const record = asRecord(payload);
     const vetoes = (record?.vetoes as unknown[] | undefined)?.map((v) => {
@@ -195,7 +211,7 @@ const mergePullRequest: ToolManifest = {
   name: "bb_merge_pull_request",
   title: "Merge pull request",
   description:
-    "Merge a pull request with optional message and strategy (merge-commit | squash | fast-forward). On 409 the merge is NOT retried automatically — a new commit likely landed; re-run canMerge then merge again.",
+    "Merge a pull request with optional message and strategy (merge-commit | squash | fast-forward; translated to Cloud ids merge_commit | squash | fast_forward). On 409 (Server/DC) the merge is NOT retried automatically — a new commit likely landed; re-run canMerge then merge again.",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
@@ -203,9 +219,10 @@ const mergePullRequest: ToolManifest = {
     message: z.string().max(32_000).optional().describe("Merge commit message."),
     strategy: MERGE_STRATEGY,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return mergePullRequestCloud(args, ctx);
     const current = await fetchPr(ctx, args);
     const body: Record<string, unknown> = { version: current.version };
     if (args["message"]) body["message"] = args["message"] as string;
@@ -227,16 +244,18 @@ const mergePullRequest: ToolManifest = {
 const declinePullRequest: ToolManifest = {
   name: "bb_decline_pull_request",
   title: "Decline pull request",
-  description: "Decline (reject) a pull request with an optional message. Version is taken from the current payload.",
+  description:
+    "Decline (reject) a pull request. Server/DC: optional message, version taken from the current payload. Cloud: decline accepts no message — post a comment if a reason should be recorded.",
   inputSchema: {
     projectKey: PROJECT_FIELD,
     repositorySlug: REPO_FIELD,
     pullRequestId: PR_ID_FIELD,
-    message: z.string().max(32_000).optional().describe("Reason for declining."),
+    message: z.string().max(32_000).optional().describe("Reason for declining (Server/DC only)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return declinePullRequestCloud(args, ctx);
     const current = await fetchPr(ctx, args);
     const body: Record<string, unknown> = { version: current.version };
     if (args["message"]) body["message"] = args["message"] as string;

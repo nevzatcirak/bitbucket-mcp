@@ -29,15 +29,6 @@ function serverCtx(): ToolCallContext {
   return { config, provider: createServerProvider(config) };
 }
 
-function cloudCtx(): ToolCallContext {
-  const { config } = loadConfig({
-    BITBUCKET_URL: "https://bitbucket.example.com",
-    BITBUCKET_TOKEN: "t",
-    BITBUCKET_PROVIDER: "cloud",
-  });
-  return { config, provider: createCloudProvider(config) };
-}
-
 const READ_ONLY_ENV = { BITBUCKET_URL: "https://bitbucket.example.com", BITBUCKET_TOKEN: "t", BITBUCKET_READ_ONLY: "true" };
 
 const MANIFESTS: ToolManifest[] = [
@@ -107,18 +98,22 @@ describe("registerAllTools", () => {
 
   it("returns structured PROVIDER_UNAVAILABLE for tools on an unimplemented provider", async () => {
     const fake = new FakeServer();
-    const cloudOnly: ToolManifest = {
-      name: "bb_cloud_only",
-      title: "Cloud-only",
-      description: "Cloud",
+    const unavailableCtx: ToolCallContext = {
+      config: loadConfig({ BITBUCKET_URL: "https://bitbucket.example.com", BITBUCKET_TOKEN: "t" }).config,
+      provider: { id: "server", available: false, client: {} as never, pagination: {} as never },
+    };
+    const serverOnly: ToolManifest = {
+      name: "bb_server_only",
+      title: "Server-only",
+      description: "Server",
       inputSchema: {},
-      providers: ["cloud"],
+      providers: ["server"],
       readOnly: true,
       handler: async () => ({ ok: true }),
     };
-    registerAllTools(fake as unknown as McpServer, cloudCtx(), [cloudOnly]);
+    registerAllTools(fake as unknown as McpServer, unavailableCtx, [serverOnly]);
 
-    const result = await fake.tools.get("bb_cloud_only")!.handler({});
+    const result = await fake.tools.get("bb_server_only")!.handler({});
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify((result as { content: [{ text: string }] }).content[0].text)).toContain("PROVIDER_UNAVAILABLE");
   });
@@ -158,15 +153,25 @@ const WRITE_TOOL_NAMES = new Set([
 ]);
 
 describe("toolManifests", () => {
-  it("ships 29 Server/DC manifests (18 read + 11 write) with provider flag set", () => {
+  it("ships 29 manifests (18 read + 11 write) with valid provider flags", () => {
     expect(toolManifests).toHaveLength(29);
     for (const manifest of toolManifests) {
-      expect(manifest.providers).toEqual(["server"]);
+      expect(manifest.providers).toContain("server");
+      expect(manifest.providers.every((p) => p === "server" || p === "cloud")).toBe(true);
     }
     expect(toolManifests.filter((m) => m.readOnly)).toHaveLength(18);
     expect(toolManifests.filter((m) => !m.readOnly).map((m) => m.name).sort()).toEqual(
       [...WRITE_TOOL_NAMES].sort(),
     );
+  });
+
+  it("advertises 27 tools on cloud (17 read + 10 write); inbox and reopen stay server-only", () => {
+    const cloudTools = selectManifests(toolManifests, "cloud", false).map((m) => m.name);
+    expect(cloudTools).toHaveLength(27);
+    expect(cloudTools).not.toContain("bb_get_inbox_pull_requests");
+    expect(cloudTools).not.toContain("bb_reopen_pull_request");
+    const cloudReadOnly = selectManifests(toolManifests, "cloud", true).map((m) => m.name);
+    expect(cloudReadOnly).toHaveLength(17);
   });
 
   it("keeps expected tool names", () => {

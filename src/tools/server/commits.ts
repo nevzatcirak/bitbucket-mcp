@@ -1,7 +1,7 @@
 /**
- * Server/DC branch and commit reading. listCommits author filtering is
- * client-side (no server-side author parameter) — paging metadata reflects
- * unfiltered pages.
+ * Branch and commit reading for both providers. listCommits author filtering
+ * is client-side on both (no server-side author parameter) — paging metadata
+ * reflects unfiltered pages.
  */
 
 import { z } from "zod";
@@ -9,25 +9,34 @@ import { asRecord, asString } from "../../core/json.js";
 import { defineCardFields, projectCard } from "../../core/compactCard.js";
 import type { ToolManifest } from "../registry.js";
 import { apiPath, epochToIso, listPage, pagedResult } from "./common.js";
+import { listBranchesCloud, listCommitsCloud } from "../cloud/reads.js";
 
 const LIMIT_FIELD = z.number().int().min(1).max(1000).default(25).describe("Page size (1-1000).");
-const START_FIELD = z.number().int().min(0).default(0).describe("Zero-based page offset.");
+const START_FIELD = z.number().int().min(0).default(0).describe("Zero-based page offset (Server/DC).");
+const PAGE_FIELD = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe("One-based page number (Cloud only; from nextPageStart of the previous call). Ignored on Server/DC.");
 
 const listBranches: ToolManifest = {
   name: "bb_list_branches",
   title: "List branches",
   description:
-    "List branches of a repository with default-branch detection (isDefault flag). Optional server-side branch name filter.",
+    "List branches of a repository with default-branch detection (isDefault flag). Optional branch name filter (server-side on Server/DC, client-side on Cloud).",
   inputSchema: {
-    projectKey: z.string().min(1).max(128).describe("Project key."),
+    projectKey: z.string().min(1).max(128).describe("Project key (on Cloud: workspace slug)."),
     repositorySlug: z.string().min(1).max(128).describe("Repository slug."),
-    filter: z.string().min(1).max(200).optional().describe("Server-side branch name filter, e.g. 'feature/'."),
+    filter: z.string().min(1).max(200).optional().describe("Branch name filter, e.g. 'feature/'."),
     limit: LIMIT_FIELD,
     start: START_FIELD,
+    page: PAGE_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return listBranchesCloud(args, ctx);
     const { items, page } = await listPage(
       ctx,
       apiPath(`/projects/${args["projectKey"] as string}/repos/${args["repositorySlug"] as string}/branches`),
@@ -57,7 +66,7 @@ const listCommits: ToolManifest = {
   inputSchema: {
     projectKey: z.string().min(1).max(128).describe("Project key."),
     repositorySlug: z.string().min(1).max(128).describe("Repository slug."),
-    since: z.string().min(1).max(64).optional().describe("Exclude commits reachable from this branch/tag/commit."),
+    since: z.string().min(1).max(64).optional().describe("Exclude commits reachable from this branch/tag/commit (Server/DC only)."),
     until: z.string().min(1).max(64).optional().describe("End of the commit range (default: default branch head)."),
     author: z
       .string()
@@ -65,13 +74,15 @@ const listCommits: ToolManifest = {
       .max(200)
       .optional()
       .describe("Filter by author username or email (client-side, case-insensitive contains)."),
-    includeMerges: z.boolean().default(true).describe("Include merge commits."),
+    includeMerges: z.boolean().default(true).describe("Include merge commits (Cloud: filtered client-side)."),
     limit: LIMIT_FIELD,
     start: START_FIELD,
+    page: PAGE_FIELD,
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: true,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return listCommitsCloud(args, ctx);
     const { items, page } = await listPage(
       ctx,
       apiPath(`/projects/${args["projectKey"] as string}/repos/${args["repositorySlug"] as string}/commits`),

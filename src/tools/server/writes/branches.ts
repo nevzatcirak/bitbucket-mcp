@@ -1,6 +1,7 @@
 /**
- * Server/DC branch write tools: create + delete (with default-branch
- * protection). Uses the bundled branch-admin REST service.
+ * Branch write tools (create + delete with default-branch protection) for
+ * both providers: Server/DC uses the bundled branch-admin REST service,
+ * Cloud uses refs/branches with mainbranch-based protection.
  */
 
 import { z } from "zod";
@@ -8,10 +9,11 @@ import { asRecord, asString } from "../../../core/json.js";
 import { ERROR_CODES, ToolError } from "../../../core/errors.js";
 import type { ToolCallContext, ToolManifest } from "../../registry.js";
 import { apiPath, listPage } from "../common.js";
+import { createBranchCloud, deleteBranchCloud } from "../../cloud/writes.js";
 
 const BRANCH_ADMIN = "/rest/branch-admin/1.0";
 
-const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key.");
+const PROJECT_FIELD = z.string().min(1).max(128).describe("Project key (on Cloud: workspace slug).");
 const REPO_FIELD = z.string().min(1).max(128).describe("Repository slug.");
 
 async function isDefaultBranch(ctx: ToolCallContext, projectKey: string, repositorySlug: string, branch: string): Promise<boolean> {
@@ -41,9 +43,10 @@ const createBranch: ToolManifest = {
       .optional()
       .describe("Branch/tag/commit to start from (default: the repository's default branch)."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return createBranchCloud(args, ctx);
     const body: Record<string, unknown> = { name: args["name"] as string };
     if (args["startPoint"]) body["startPoint"] = args["startPoint"] as string;
     const payload = await ctx.provider.client.post<unknown>(
@@ -69,9 +72,10 @@ const deleteBranch: ToolManifest = {
     repositorySlug: REPO_FIELD,
     name: z.string().min(1).max(256).describe("Branch to delete."),
   },
-  providers: ["server"],
+  providers: ["server", "cloud"],
   readOnly: false,
   handler: async (args, ctx) => {
+    if (ctx.provider.id === "cloud") return deleteBranchCloud(args, ctx);
     const name = args["name"] as string;
     if (await isDefaultBranch(ctx, args["projectKey"] as string, args["repositorySlug"] as string, name)) {
       throw new ToolError(

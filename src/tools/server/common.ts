@@ -60,6 +60,8 @@ export function pagedResult<T>(
       start: page.start,
       isLastPage: page.isLastPage,
       nextPageStart: page.nextPageStart,
+      // Cursor-mode providers (Cloud) surface the follow-up page here.
+      ...(page.nextCursor != null ? { nextCursor: page.nextCursor } : {}),
       ...(warning ? { warning } : {}),
     },
   };

@@ -32,7 +32,12 @@ describe("createServerProvider", () => {
     const provider = createServerProvider(config);
     expect(provider.id).toBe("server");
     expect(provider.available).toBe(true);
-    expect(provider.pagination).toEqual({ limitParam: "limit", startParam: "start", oneBasedPage: false });
+    expect(provider.pagination).toEqual({
+      limitParam: "limit",
+      startParam: "start",
+      oneBasedPage: false,
+      pageMode: "number",
+    });
     expect(provider.client).toBeDefined();
   });
 

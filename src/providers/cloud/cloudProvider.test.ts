@@ -13,7 +13,12 @@ describe("createCloudProvider", () => {
     const provider = createCloudProvider(config);
     expect(provider.id).toBe("cloud");
     expect(provider.available).toBe(false);
-    expect(provider.pagination).toEqual({ limitParam: "pagelen", startParam: "page", oneBasedPage: true });
+    expect(provider.pagination).toEqual({
+      limitParam: "pagelen",
+      startParam: "page",
+      oneBasedPage: true,
+      pageMode: "cursor",
+    });
     expect(provider.client).toBeDefined();
   });
 });

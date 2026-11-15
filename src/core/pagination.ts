@@ -9,7 +9,7 @@
  * `nextPageStart` so MCP clients can page with a single convention.
  */
 
-import { asNumber, asRecord } from "./json.js";
+import { asNumber, asRecord, asString } from "./json.js";
 import type { PaginationStyle } from "./provider.js";
 
 export const DEFAULT_PAGE_LIMIT = 25;
@@ -27,6 +27,11 @@ export interface PageMeta {
   readonly start: number;
   readonly isLastPage: boolean;
   readonly nextPageStart: number | null;
+  /**
+   * Opaque follow-up cursor for cursor-mode providers (populated from the
+   * envelope's `next` URL). Always null for number-mode providers.
+   */
+  readonly nextCursor: string | null;
 }
 
 /** Clamp + translate a PageRequest into the provider's query parameter names. */
@@ -56,12 +61,33 @@ export function pageMeta(
 
   const explicitIsLast = typeof record?.isLastPage === "boolean" ? record.isLastPage : null;
   const total = asNumber(record?.total);
-  const isLastPage = explicitIsLast ?? (total !== null ? start + size >= total : true);
+  const nextUrl = asString(record?.next);
+  const isLastPage =
+    explicitIsLast ?? (nextUrl !== null ? false : total !== null ? start + size >= total : true);
 
   const explicitNext = asNumber(record?.nextPageStart);
   const nextPageStart = explicitNext ?? (isLastPage ? null : start + size);
+  const nextCursor = nextUrl === null ? null : (cursorFromNextUrl(nextUrl) ?? nextUrl);
 
-  return { size, limit, start, isLastPage, nextPageStart };
+  return { size, limit, start, isLastPage, nextPageStart, nextCursor };
+}
+
+/**
+ * Extract the cursor segment from a Cloud-style `next` URL when it is the
+ * last path segment (e.g. ".../next?cursor=abc" or a path token). Phase 3
+ * (Cloud adapter) will refine this once the exact envelope shape is wired.
+ */
+export function cursorFromNextUrl(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.searchParams.get("cursor") ?? raw;
+  } catch {
+    // Not an absolute URL — treat the last path segment as the cursor.
+    const segments = raw.split("/").filter(Boolean);
+    return segments.length > 0 ? (segments[segments.length - 1] ?? null) : null;
+  }
 }
 
 /** Pull the item array out of a page envelope across known key names. */

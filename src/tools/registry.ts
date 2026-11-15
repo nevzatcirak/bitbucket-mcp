@@ -13,6 +13,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
+import { requireCompleteConfig } from "../core/config.js";
 import type { BitbucketConfig } from "../core/config.js";
 import { ERROR_CODES, mcpError, mcpText, toMcpError } from "../core/errors.js";
 import type { ProviderContext, ProviderId } from "../core/provider.js";
@@ -36,8 +37,24 @@ export interface ToolManifest {
   readonly handler: (args: ToolArgs, ctx: ToolCallContext) => Promise<unknown>;
 }
 
-/** Phase 1 tools append their manifests here. */
-export const toolManifests: ToolManifest[] = [];
+/** Phase 1 Server/DC tool manifests, grouped by domain. */
+import { discoveryToolManifests } from "./server/discovery.js";
+import { codeSearchToolManifests } from "./server/codeSearch.js";
+import { pullRequestToolManifests } from "./server/pullRequests.js";
+import { reviewToolManifests } from "./server/reviews.js";
+import { dashboardToolManifests } from "./server/dashboard.js";
+import { userToolManifests } from "./server/users.js";
+import { commitToolManifests } from "./server/commits.js";
+
+export const toolManifests: ToolManifest[] = [
+  ...discoveryToolManifests,
+  ...codeSearchToolManifests,
+  ...pullRequestToolManifests,
+  ...reviewToolManifests,
+  ...dashboardToolManifests,
+  ...userToolManifests,
+  ...commitToolManifests,
+];
 
 export function selectManifests(
   manifests: readonly ToolManifest[],
@@ -70,6 +87,12 @@ export function registerAllTools(
             `The "${ctx.provider.id}" provider adapter is not implemented yet.`,
             { provider: ctx.provider.id, tool: manifest.name },
           );
+        }
+        const configProblems = requireCompleteConfig(ctx.config);
+        if (configProblems.length > 0) {
+          return mcpError(ERROR_CODES.CONFIG_MISSING, "Bitbucket configuration is incomplete.", {
+            problems: configProblems,
+          });
         }
         try {
           return mcpText(await manifest.handler(args ?? {}, ctx));

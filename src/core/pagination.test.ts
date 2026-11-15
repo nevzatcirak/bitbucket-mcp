@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPageItems, pageMeta, pageQuery } from "./pagination.js";
+import { cursorFromNextUrl, extractPageItems, pageMeta, pageQuery } from "./pagination.js";
 import { SERVER_PAGINATION, CLOUD_PAGINATION } from "./provider.js";
 
 describe("pageQuery", () => {
@@ -29,6 +29,7 @@ describe("pageMeta", () => {
       start: 0,
       isLastPage: false,
       nextPageStart: 25,
+      nextCursor: null,
     });
   });
 
@@ -39,6 +40,7 @@ describe("pageMeta", () => {
       start: 10,
       isLastPage: true,
       nextPageStart: null,
+      nextCursor: null,
     });
   });
 
@@ -53,6 +55,37 @@ describe("pageMeta", () => {
   it("respects an explicit isLastPage even against total", () => {
     const payload = { size: 10, start: 0, total: 100, isLastPage: true };
     expect(pageMeta(payload, 0, 10, 10)).toMatchObject({ isLastPage: true, nextPageStart: null });
+  });
+
+  it("extracts a cursor from a Cloud-style next URL", () => {
+    const payload = {
+      size: 25,
+      pagelen: 25,
+      next: "https://api.example.org/2.0/repos?pagelen=25&cursor=tok-2",
+      values: [{}],
+    };
+    expect(pageMeta(payload, 0, 25, 25)).toMatchObject({
+      isLastPage: false,
+      nextCursor: "tok-2",
+    });
+  });
+});
+
+describe("cursorFromNextUrl", () => {
+  it("prefers the cursor query parameter", () => {
+    expect(cursorFromNextUrl("https://api.example.org/x?cursor=abc&page=2")).toBe("abc");
+  });
+
+  it("falls back to the last path segment for relative values and keeps opaque URLs", () => {
+    expect(cursorFromNextUrl("/rest/api/1.0/next/tok42")).toBe("tok42");
+    expect(cursorFromNextUrl("https://api.example.org/2.0/repos?pagelen=25&page=2")).toBe(
+      "https://api.example.org/2.0/repos?pagelen=25&page=2",
+    );
+  });
+
+  it("returns null for missing or invalid values", () => {
+    expect(cursorFromNextUrl(undefined)).toBeNull();
+    expect(cursorFromNextUrl(42)).toBeNull();
   });
 });
 

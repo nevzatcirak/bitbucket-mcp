@@ -57,7 +57,13 @@ async function main(): Promise<void> {
     );
   }
 
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const server = new McpServer(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    // Declare the tools capability up front so tools/list returns { tools: [] }
+    // even before the first tool is registered (otherwise the SDK answers
+    // "Method not found" for tools/list on an empty registry).
+    { capabilities: { tools: {} } },
+  );
   const advertised = registerAllTools(server, { config, provider });
   log(
     `${SERVER_NAME} v${SERVER_VERSION} ready (provider=${provider.id}, tools advertised: ${advertised.length}, read-only=${config.readOnly})`,

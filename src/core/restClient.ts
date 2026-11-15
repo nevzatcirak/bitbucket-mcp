@@ -11,7 +11,8 @@ export type RestErrorCode =
   | "VALIDATION"
   | "UPSTREAM_ERROR"
   | "NETWORK_ERROR"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "NOT_IMPLEMENTED";
 
 export class RestError extends Error {
   readonly status: number;

@@ -144,7 +144,37 @@ describe("registerAllTools", () => {
 });
 
 describe("toolManifests", () => {
-  it("is empty in phase 0", () => {
-    expect(toolManifests).toEqual([]);
+  it("ships 18 Server/DC read-only manifests with provider flag set", () => {
+    expect(toolManifests).toHaveLength(18);
+    for (const manifest of toolManifests) {
+      expect(manifest.providers).toEqual(["server"]);
+      expect(manifest.readOnly).toBe(true);
+    }
+  });
+
+  it("keeps expected tool names", () => {
+    const names = toolManifests.map((m) => m.name).sort();
+    expect(names).toEqual(
+      [
+        "bb_browse_repository",
+        "bb_get_dashboard_pull_requests",
+        "bb_get_file_content",
+        "bb_get_inbox_pull_requests",
+        "bb_get_pr_comments_and_actions",
+        "bb_get_project",
+        "bb_get_pull_request",
+        "bb_get_pull_request_builds",
+        "bb_get_pull_request_changes",
+        "bb_get_pull_request_diff",
+        "bb_get_projects",
+        "bb_get_repositories",
+        "bb_get_repository",
+        "bb_get_user",
+        "bb_list_branches",
+        "bb_list_commits",
+        "bb_list_pull_requests",
+        "bb_search_code",
+      ].sort(),
+    );
   });
 });

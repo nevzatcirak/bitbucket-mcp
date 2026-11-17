@@ -31,6 +31,16 @@ A deployment-agnostic [Model Context Protocol](https://modelcontextprotocol.io) 
 | Read-only environments | `BITBUCKET_READ_ONLY=true` hides every write tool from the MCP client |
 | Mixed estates | Pick `server` or `cloud` with one env variable; tool availability adapts per provider |
 
+## Atlassian MCP Suite
+
+| Package | Scope |
+|---|---|
+| [@nevzatcirak/jira-mcp](https://www.npmjs.com/package/@nevzatcirak/jira-mcp) | Jira issues, boards, sprints, worklogs |
+| [@nevzatcirak/bitbucket-mcp](https://www.npmjs.com/package/@nevzatcirak/bitbucket-mcp) | Bitbucket Server/DC + Cloud: PRs, reviews, branches, code search |
+| [@nevzatcirak/confluence-mcp](https://www.npmjs.com/package/@nevzatcirak/confluence-mcp) | Confluence Server/DC + Cloud: pages, CQL search, labels, markdown round-trip |
+
+Install the other two depending on the client you use: `npx @nevzatcirak/jira-mcp` · `npx @nevzatcirak/confluence-mcp`
+
 ## ✨ Features
 
 | Area | What ships |
